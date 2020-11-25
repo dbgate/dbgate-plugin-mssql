@@ -19,7 +19,8 @@ const driver = {
   ...driverBase,
   dumperClass: MsSqlDumper,
   dialect,
-  engine: 'mssql',
+  engine: 'mssql@dbgate-plugin-mssql',
+  title: 'Microsoft SQL Server',
 };
 
 module.exports = driver;

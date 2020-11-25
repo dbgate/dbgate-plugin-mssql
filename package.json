@@ -22,7 +22,8 @@
     "lib"
   ],
   "scripts": {
-    "build": "cd frontend && yarn build && cd ../backend && yarn build"
+    "build": "cd frontend && yarn build && cd ../backend && yarn build",
+    "lnd": "ln -s ~/jenasoft/dbgate-plugin-mssql ~/dbgate-data/plugins/dbgate-plugin-mssql"
   },
   "devDependencies": {
     "webpack": "^4.42.0",

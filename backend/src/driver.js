@@ -1,7 +1,7 @@
 const _ = require('lodash');
 const stream = require('stream');
 const mssql = require('mssql');
-const { driverBase } = require('../../frontend/src/driver');
+const driverBase = require('../../frontend/src/driver');
 const MsSqlAnalyser = require('./MsSqlAnalyser');
 const createBulkInsertStream = require('./createBulkInsertStream');
 
@@ -44,7 +44,7 @@ function extractColumns(columns) {
 const driver = {
   ...driverBase,
   analyserClass: MsSqlAnalyser,
-  async connect( { server, port, user, password, database }) {
+  async connect({ server, port, user, password, database }) {
     const pool = new mssql.ConnectionPool({
       server,
       port,
