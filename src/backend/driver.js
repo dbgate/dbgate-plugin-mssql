@@ -1,7 +1,7 @@
 const _ = require('lodash');
 const stream = require('stream');
 const mssql = require('mssql');
-const driverBase = require('../../frontend/src/driver');
+const driverBase = require('../frontend/driver');
 const MsSqlAnalyser = require('./MsSqlAnalyser');
 const createBulkInsertStream = require('./createBulkInsertStream');
 
