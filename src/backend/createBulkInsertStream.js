@@ -23,7 +23,7 @@ function createBulkInsertStream(driver, mssql, stream, pool, name, options) {
     writable.buffer = [];
     const table = new mssql.Table(fullName);
     // table.create = options.createIfNotExists;
-    for (const column of this.columnNames) {
+    for (const column of writable.columnNames) {
       const tcol = writable.templateColumns.find((x) => x.name == column);
       // console.log('TCOL', tcol);
       // console.log('TYPE', tcol.type, mssql.Int);
@@ -36,7 +36,7 @@ function createBulkInsertStream(driver, mssql, stream, pool, name, options) {
       });
     }
     for (const row of rows) {
-      table.rows.add(...this.columnNames.map((col) => row[col]));
+      table.rows.add(...writable.columnNames.map((col) => row[col]));
     }
     const request = pool.request();
     await request.bulk(table);
