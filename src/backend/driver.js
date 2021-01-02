@@ -151,7 +151,7 @@ const driver = {
     request.on('info', handleInfo);
     request.query(sql);
 
-    return request;
+    // return request;
   },
   async readQuery(pool, sql, structure) {
     const request = await pool.request();
