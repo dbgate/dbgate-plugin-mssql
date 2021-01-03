@@ -119,7 +119,6 @@ const driver = {
       });
     };
 
-
     pool.on('infoMessage', handleInfo);
     pool.on('errorMessage', handleError);
     const request = new tedious.Request(sql, (err, rowCount) => {
@@ -141,29 +140,30 @@ const driver = {
       options.row(row);
     });
     pool.execSql(request);
-
   },
   async readQuery(pool, sql, structure) {
-    const request = await pool.request();
-
     const pass = new stream.PassThrough({
       objectMode: true,
       highWaterMark: 100,
     });
+    let currentColumns = [];
 
-    request.stream = true;
-    request.on('recordset', (driverColumns) => {
-      const [columns, mapper] = extractColumns(driverColumns);
-      pass.write(structure || { columns });
-    });
-    request.on('row', (row) => pass.write(row));
-    request.on('error', (err) => {
-      console.error(err);
+    const request = new tedious.Request(sql, (err, rowCount) => {
+      if (err) console.error(err);
       pass.end();
     });
-    request.on('done', () => pass.end());
-
-    request.query(sql);
+    request.on('columnMetadata', function (columns) {
+      currentColumns = extractColumns(columns);
+      pass.write(structure || { columns: currentColumns });
+    });
+    request.on('row', function (columns) {
+      const row = _.zipObject(
+        currentColumns.map((x) => x.columnName),
+        columns.map((x) => x.value)
+      );
+      pass.write(row)
+    });
+    pool.execSql(request);
 
     return pass;
   },
