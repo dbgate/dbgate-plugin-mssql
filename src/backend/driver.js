@@ -1,43 +1,36 @@
 const _ = require('lodash');
 const stream = require('stream');
-const mssql = require('mssql');
+// const mssql = require('mssql');
+const tedious = require('tedious');
 const driverBase = require('../frontend/driver');
 const MsSqlAnalyser = require('./MsSqlAnalyser');
 const createBulkInsertStream = require('./createBulkInsertStream');
 
-function extractColumns(columns) {
-  const mapper = {};
-  const res = _.sortBy(_.values(columns), 'index').map((col) => ({
-    ...col,
-    columnName: col.name,
-    notNull: !col.nullable,
-  }));
+function extractColumns(columns, addDriverNativeColumn = false) {
+  const res = columns.map((col) => {
+    const resCol = {
+      columnName: col.colName,
+      dataType: col.type.name.toLowerCase(),
+      driverNativeColumn: addDriverNativeColumn ? col : undefined,
 
-  const generateName = () => {
-    let index = 1;
-    while (res.find((x) => x.columnName == `col${index}`)) index += 1;
-    return `col${index}`;
-  };
+      notNull: !(col.flags & 0x01),
+      autoIncrement: !!(col.flags & 0x10),
+    };
+    if (col.dataLength) resCol.dataType += `(${col.dataLength})`;
+    return resCol;
+  });
 
-  // const groups = _.groupBy(res, 'columnName');
-  // for (const colname of _.keys(groups)) {
-  //   if (groups[colname].length == 1) continue;
-  //   mapper[colname] = [];
-  //   for (const col of groups[colname]) {
-  //     col.columnName = generateName();
-  //     mapper[colname].push(colname);
-  //   }
-  // }
-
-  for (const col of res) {
-    if (!col.columnName) {
-      const newName = generateName();
-      mapper[col.columnName] = newName;
-      col.columnName = newName;
+  const usedNames = new Set();
+  for (let i = 0; i < res.length; i++) {
+    if (usedNames.has(res[i].columnName)) {
+      let suffix = 2;
+      while (res.has(`${res[i].columnName}${suffix}`)) suffix++;
+      res[i].columnName = `${res[i].columnName}${suffix}`;
     }
+    usedNames.add(res[i].columnName);
   }
 
-  return [res, mapper];
+  return res;
 }
 
 /** @type {import('dbgate-types').EngineDriver} */
@@ -45,46 +38,70 @@ const driver = {
   ...driverBase,
   analyserClass: MsSqlAnalyser,
   async connect({ server, port, user, password, database }) {
-    const pool = new mssql.ConnectionPool({
-      server,
-      port,
-      user,
-      password,
-      database,
-      requestTimeout: 1000 * 3600,
-      options: {
-        enableArithAbort: true,
-      },
+    return new Promise((resolve, reject) => {
+      const connection = new tedious.Connection({
+        server,
+
+        authentication: {
+          type: 'default',
+          options: {
+            userName: user,
+            password: password,
+          },
+        },
+
+        options: {
+          encrypt: false,
+          enableArithAbort: true,
+          validateBulkLoadParameters: false,
+          requestTimeout: 1000 * 3600,
+          database,
+          port,
+        },
+      });
+      connection.on('connect', function (err) {
+        if (err) {
+          reject(err);
+        }
+        resolve(connection);
+      });
+      connection.connect();
     });
-    await pool.connect();
-    return pool;
   },
   // @ts-ignore
-  async query(pool, sql) {
+  async query(pool, sql, options) {
     if (sql == null) {
       return {
         rows: [],
         columns: [],
       };
     }
-    const resp = await pool.request().query(sql);
-    // console.log(Object.keys(resp.recordset));
-    // console.log(resp);
-    const res = {};
-
-    if (resp.recordset) {
-      const [columns] = extractColumns(resp.recordset.columns);
-      res.columns = columns;
-      res.rows = resp.recordset;
-    }
-    if (resp.rowsAffected) {
-      res.rowsAffected = _.sum(resp.rowsAffected);
-    }
-    return res;
+    const { addDriverNativeColumn } = options || {};
+    return new Promise((resolve, reject) => {
+      const result = {
+        rows: [],
+        columns: [],
+      };
+      const request = new tedious.Request(sql, (err, rowCount) => {
+        if (err) reject(err);
+        else resolve(result);
+      });
+      request.on('columnMetadata', function (columns) {
+        result.columns = extractColumns(columns, addDriverNativeColumn);
+      });
+      request.on('row', function (columns) {
+        result.rows.push(
+          _.zipObject(
+            result.columns.map((x) => x.columnName),
+            columns.map((x) => x.value)
+          )
+        );
+      });
+      pool.execSql(request);
+    });
   },
   async stream(pool, sql, options) {
-    const request = await pool.request();
-    let currentMapper = null;
+    let currentColumns = [];
 
     const handleInfo = (info) => {
       const { message, lineNumber, procName } = info;
@@ -96,42 +113,6 @@ const driver = {
         severity: 'info',
       });
     };
-
-    const handleDone = (result) => {
-      // console.log('RESULT', result);
-      options.done(result);
-    };
-
-    const handleRow = (row) => {
-      // if (currentMapper) {
-      //   for (const colname of _.keys(currentMapper)) {
-      //     let index = 0;
-      //     for (const newcolname of currentMapper[colname]) {
-      //       row[newcolname] = row[colname][index];
-      //       index += 1;
-      //     }
-      //     delete row[colname];
-      //   }
-      // }
-      if (currentMapper) {
-        row = { ...row };
-        for (const colname of _.keys(currentMapper)) {
-          const newcolname = currentMapper[colname];
-          row[newcolname] = row[colname];
-          if (_.isArray(row[newcolname])) row[newcolname] = row[newcolname].join(',');
-          delete row[colname];
-        }
-      }
-
-      options.row(row);
-    };
-
-    const handleRecordset = (columns) => {
-      const [extractedColumns, mapper] = extractColumns(columns);
-      currentMapper = mapper;
-      options.recordset(extractedColumns);
-    };
-
     const handleError = (error) => {
       const { message, lineNumber, procName } = error;
       options.info({
@@ -143,42 +124,56 @@ const driver = {
       });
     };
 
-    request.stream = true;
-    request.on('recordset', handleRecordset);
-    request.on('row', handleRow);
-    request.on('error', handleError);
-    request.on('done', handleDone);
-    request.on('info', handleInfo);
-    request.query(sql);
-
-    // return request;
+    pool.on('infoMessage', handleInfo);
+    pool.on('errorMessage', handleError);
+    const request = new tedious.Request(sql, (err, rowCount) => {
+      // if (err) reject(err);
+      // else resolve(result);
+      options.done();
+      pool.off('infoMessage', handleInfo);
+      pool.off('errorMessage', handleError);
+    });
+    request.on('columnMetadata', function (columns) {
+      currentColumns = extractColumns(columns);
+      options.recordset(currentColumns);
+    });
+    request.on('row', function (columns) {
+      const row = _.zipObject(
+        currentColumns.map((x) => x.columnName),
+        columns.map((x) => x.value)
+      );
+      options.row(row);
+    });
+    pool.execSqlBatch(request);
   },
   async readQuery(pool, sql, structure) {
-    const request = await pool.request();
-
     const pass = new stream.PassThrough({
       objectMode: true,
       highWaterMark: 100,
     });
+    let currentColumns = [];
 
-    request.stream = true;
-    request.on('recordset', (driverColumns) => {
-      const [columns, mapper] = extractColumns(driverColumns);
-      pass.write(structure || { columns });
-    });
-    request.on('row', (row) => pass.write(row));
-    request.on('error', (err) => {
-      console.error(err);
+    const request = new tedious.Request(sql, (err, rowCount) => {
+      if (err) console.error(err);
       pass.end();
     });
-    request.on('done', () => pass.end());
-
-    request.query(sql);
+    request.on('columnMetadata', function (columns) {
+      currentColumns = extractColumns(columns);
+      pass.write(structure || { columns: currentColumns });
+    });
+    request.on('row', function (columns) {
+      const row = _.zipObject(
+        currentColumns.map((x) => x.columnName),
+        columns.map((x) => x.value)
+      );
+      pass.write(row);
+    });
+    pool.execSql(request);
 
     return pass;
   },
   async writeTable(pool, name, options) {
-    return createBulkInsertStream(this, mssql, stream, pool, name, options);
+    return createBulkInsertStream(this, stream, pool, name, options);
   },
   async getVersion(pool) {
     const { version } = (await this.query(pool, 'SELECT @@VERSION AS version')).rows[0];

@@ -1,10 +1,47 @@
 const { createBulkInsertStreamBase } = require('dbgate-tools');
+const tedious = require('tedious');
+const getConcreteType = require('./getConcreteType');
+
+function runBulkInsertBatch(pool, tableName, writable, rows) {
+  return new Promise((resolve, reject) => {
+    var options = { keepNulls: true };
+
+    // instantiate - provide the table where you'll be inserting to, options and a callback
+    var bulkLoad = pool.newBulkLoad(tableName, options, (error, rowCount) => {
+      if (error) reject(error);
+      else resolve();
+    });
+
+    for (const column of writable.columnNames) {
+      const tcol = writable.templateColumns.find((x) => x.columnName == column);
+
+      bulkLoad.addColumn(
+        column,
+        tcol
+          ? getConcreteType(tcol.driverNativeColumn.type, tcol.driverNativeColumn.dataLength)
+          : tedious.TYPES.NVarChar,
+        {
+          nullable: tcol ? !tcol.notNull : true,
+          length: tcol ? tcol.driverNativeColumn.dataLength : undefined,
+          precision: tcol ? tcol.driverNativeColumn.precision : undefined,
+          scale: tcol ? tcol.driverNativeColumn.scale : undefined,
+        }
+      );
+    }
+
+    for (const row of rows) {
+      bulkLoad.addRow(row);
+    }
+
+    pool.execBulkLoad(bulkLoad);
+  });
+}
 
 /**
  *
  * @param {import('dbgate-types').EngineDriver} driver
  */
-function createBulkInsertStream(driver, mssql, stream, pool, name, options) {
+function createBulkInsertStream(driver, stream, pool, name, options) {
   const writable = createBulkInsertStreamBase(driver, stream, pool, name, options);
 
   const fullName = name.schemaName ? `[${name.schemaName}].[${name.pureName}]` : name.pureName;
@@ -15,31 +52,16 @@ function createBulkInsertStream(driver, mssql, stream, pool, name, options) {
         ? `${driver.dialect.quoteIdentifier(name.schemaName)}.${driver.dialect.quoteIdentifier(name.pureName)}`
         : driver.dialect.quoteIdentifier(name.pureName);
 
-      const respTemplate = await pool.request().query(`SELECT * FROM ${fullNameQuoted} WHERE 1=0`);
-      writable.templateColumns = respTemplate.recordset.toTable().columns;
+      const respTemplate = await driver.query(pool, `SELECT * FROM ${fullNameQuoted} WHERE 1=0`, {
+        addDriverNativeColumn: true,
+      });
+      writable.templateColumns = respTemplate.columns;
     }
 
     const rows = writable.buffer;
     writable.buffer = [];
-    const table = new mssql.Table(fullName);
-    // table.create = options.createIfNotExists;
-    for (const column of writable.columnNames) {
-      const tcol = writable.templateColumns.find((x) => x.name == column);
-      // console.log('TCOL', tcol);
-      // console.log('TYPE', tcol.type, mssql.Int);
-      // table.columns.add(column, tcol ? tcol.type : mssql.NVarChar(mssql.MAX));
-      table.columns.add(column, tcol ? tcol.type : mssql.NVarChar(mssql.MAX), {
-        nullable: tcol.nullable,
-        length: tcol.length,
-        precision: tcol.precision,
-        scale: tcol.scale,
-      });
-    }
-    for (const row of rows) {
-      table.rows.add(...writable.columnNames.map((col) => row[col]));
-    }
-    const request = pool.request();
-    await request.bulk(table);
+
+    await runBulkInsertBatch(pool, fullName, writable, rows);
   };
 
   return writable;
