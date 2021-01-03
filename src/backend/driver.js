@@ -6,41 +6,6 @@ const driverBase = require('../frontend/driver');
 const MsSqlAnalyser = require('./MsSqlAnalyser');
 const createBulkInsertStream = require('./createBulkInsertStream');
 
-// function extractColumns(columns) {
-//   const mapper = {};
-//   const res = _.sortBy(_.values(columns), 'index').map((col) => ({
-//     ...col,
-//     columnName: col.name,
-//     notNull: !col.nullable,
-//   }));
-
-//   const generateName = () => {
-//     let index = 1;
-//     while (res.find((x) => x.columnName == `col${index}`)) index += 1;
-//     return `col${index}`;
-//   };
-
-//   // const groups = _.groupBy(res, 'columnName');
-//   // for (const colname of _.keys(groups)) {
-//   //   if (groups[colname].length == 1) continue;
-//   //   mapper[colname] = [];
-//   //   for (const col of groups[colname]) {
-//   //     col.columnName = generateName();
-//   //     mapper[colname].push(colname);
-//   //   }
-//   // }
-
-//   for (const col of res) {
-//     if (!col.columnName) {
-//       const newName = generateName();
-//       mapper[col.columnName] = newName;
-//       col.columnName = newName;
-//     }
-//   }
-
-//   return [res, mapper];
-// }
-
 function extractColumns(columns) {
   const res = columns.map((col) => {
     const resCol = {
@@ -129,24 +94,9 @@ const driver = {
       });
       pool.execSql(request);
     });
-    // const resp = await pool.request().query(sql);
-    // // console.log(Object.keys(resp.recordset));
-    // // console.log(resp);
-    // const res = {};
-
-    // if (resp.recordset) {
-    //   const [columns] = extractColumns(resp.recordset.columns);
-    //   res.columns = columns;
-    //   res.rows = resp.recordset;
-    // }
-    // if (resp.rowsAffected) {
-    //   res.rowsAffected = _.sum(resp.rowsAffected);
-    // }
-    // return res;
   },
   async stream(pool, sql, options) {
-    const request = await pool.request();
-    let currentMapper = null;
+    let currentColumns = [];
 
     const handleInfo = (info) => {
       const { message, lineNumber, procName } = info;
@@ -158,42 +108,6 @@ const driver = {
         severity: 'info',
       });
     };
-
-    const handleDone = (result) => {
-      // console.log('RESULT', result);
-      options.done(result);
-    };
-
-    const handleRow = (row) => {
-      // if (currentMapper) {
-      //   for (const colname of _.keys(currentMapper)) {
-      //     let index = 0;
-      //     for (const newcolname of currentMapper[colname]) {
-      //       row[newcolname] = row[colname][index];
-      //       index += 1;
-      //     }
-      //     delete row[colname];
-      //   }
-      // }
-      if (currentMapper) {
-        row = { ...row };
-        for (const colname of _.keys(currentMapper)) {
-          const newcolname = currentMapper[colname];
-          row[newcolname] = row[colname];
-          if (_.isArray(row[newcolname])) row[newcolname] = row[newcolname].join(',');
-          delete row[colname];
-        }
-      }
-
-      options.row(row);
-    };
-
-    const handleRecordset = (columns) => {
-      const [extractedColumns, mapper] = extractColumns(columns);
-      currentMapper = mapper;
-      options.recordset(extractedColumns);
-    };
-
     const handleError = (error) => {
       const { message, lineNumber, procName } = error;
       options.info({
@@ -205,15 +119,29 @@ const driver = {
       });
     };
 
-    request.stream = true;
-    request.on('recordset', handleRecordset);
-    request.on('row', handleRow);
-    request.on('error', handleError);
-    request.on('done', handleDone);
-    request.on('info', handleInfo);
-    request.query(sql);
 
-    // return request;
+    pool.on('infoMessage', handleInfo);
+    pool.on('errorMessage', handleError);
+    const request = new tedious.Request(sql, (err, rowCount) => {
+      // if (err) reject(err);
+      // else resolve(result);
+      options.done();
+      pool.off('infoMessage', handleInfo);
+      pool.off('errorMessage', handleError);
+    });
+    request.on('columnMetadata', function (columns) {
+      currentColumns = extractColumns(columns);
+      options.recordset(currentColumns);
+    });
+    request.on('row', function (columns) {
+      const row = _.zipObject(
+        currentColumns.map((x) => x.columnName),
+        columns.map((x) => x.value)
+      );
+      options.row(row);
+    });
+    pool.execSql(request);
+
   },
   async readQuery(pool, sql, structure) {
     const request = await pool.request();
