@@ -6,11 +6,15 @@ const driverBase = require('../frontend/driver');
 const MsSqlAnalyser = require('./MsSqlAnalyser');
 const createBulkInsertStream = require('./createBulkInsertStream');
 
-function extractColumns(columns) {
+function extractColumns(columns, addDriverNativeColumn = false) {
   const res = columns.map((col) => {
     const resCol = {
       columnName: col.colName,
       dataType: col.type.name.toLowerCase(),
+      driverNativeColumn: addDriverNativeColumn ? col : undefined,
+
+      notNull: !(col.flags & 0x01),
+      autoIncrement: !!(col.flags & 0x10),
     };
     if (col.dataLength) resCol.dataType += `(${col.dataLength})`;
     return resCol;
@@ -65,13 +69,14 @@ const driver = {
     });
   },
   // @ts-ignore
-  async query(pool, sql) {
+  async query(pool, sql, options) {
     if (sql == null) {
       return {
         rows: [],
         columns: [],
       };
     }
+    const { addDriverNativeColumn } = options || {};
     return new Promise((resolve, reject) => {
       const result = {
         rows: [],
@@ -82,7 +87,7 @@ const driver = {
         else resolve(result);
       });
       request.on('columnMetadata', function (columns) {
-        result.columns = extractColumns(columns);
+        result.columns = extractColumns(columns, addDriverNativeColumn);
       });
       request.on('row', function (columns) {
         result.rows.push(
@@ -139,7 +144,7 @@ const driver = {
       );
       options.row(row);
     });
-    pool.execSql(request);
+    pool.execSqlBatch(request);
   },
   async readQuery(pool, sql, structure) {
     const pass = new stream.PassThrough({
@@ -161,14 +166,14 @@ const driver = {
         currentColumns.map((x) => x.columnName),
         columns.map((x) => x.value)
       );
-      pass.write(row)
+      pass.write(row);
     });
     pool.execSql(request);
 
     return pass;
   },
   async writeTable(pool, name, options) {
-    return createBulkInsertStream(this, mssql, stream, pool, name, options);
+    return createBulkInsertStream(this, stream, pool, name, options);
   },
   async getVersion(pool) {
     const { version } = (await this.query(pool, 'SELECT @@VERSION AS version')).rows[0];
