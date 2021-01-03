@@ -132,6 +132,13 @@ const driver = {
       options.done();
       pool.off('infoMessage', handleInfo);
       pool.off('errorMessage', handleError);
+
+      options.info({
+        message: `${rowCount} rows affected`,
+        time: new Date(),
+        severity: 'info',
+      });
+
     });
     request.on('columnMetadata', function (columns) {
       currentColumns = extractColumns(columns);
