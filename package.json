@@ -29,6 +29,7 @@
     "plugout": "dbgate-plugout dbgate-plugin-mssql"
   },
   "devDependencies": {
+    "async-lock": "^1.2.6",
     "dbgate-plugin-tools": "^1.0.4",
     "dbgate-tools": "^1.0.5",
     "tedious": "^9.2.3",

@@ -5,6 +5,8 @@ const tedious = require('tedious');
 const driverBase = require('../frontend/driver');
 const MsSqlAnalyser = require('./MsSqlAnalyser');
 const createBulkInsertStream = require('./createBulkInsertStream');
+const AsyncLock = require('async-lock');
+const lock = new AsyncLock();
 
 function extractColumns(columns, addDriverNativeColumn = false) {
   const res = columns.map((col) => {
@@ -68,13 +70,12 @@ const driver = {
       connection.connect();
     });
   },
-  // @ts-ignore
-  async query(pool, sql, options) {
+  async queryCore(pool, sql, options) {
     if (sql == null) {
-      return {
+      return Promise.resolve({
         rows: [],
         columns: [],
-      };
+      });
     }
     const { addDriverNativeColumn } = options || {};
     return new Promise((resolve, reject) => {
@@ -98,6 +99,11 @@ const driver = {
         );
       });
       pool.execSql(request);
+    });
+  },
+  async query(pool, sql, options) {
+    return lock.acquire('connection', async () => {
+      return this.queryCore(pool, sql, options);
     });
   },
   async stream(pool, sql, options) {
@@ -138,7 +144,6 @@ const driver = {
         time: new Date(),
         severity: 'info',
       });
-
     });
     request.on('columnMetadata', function (columns) {
       currentColumns = extractColumns(columns);
