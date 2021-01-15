@@ -9,7 +9,19 @@ const AsyncLock = require('async-lock');
 const lock = new AsyncLock();
 let msnodesqlv8;
 
-function extractColumns(columns, addDriverNativeColumn = false) {
+function makeUniqueColumnNames(res) {
+  const usedNames = new Set();
+  for (let i = 0; i < res.length; i++) {
+    if (usedNames.has(res[i].columnName)) {
+      let suffix = 2;
+      while (usedNames.has(`${res[i].columnName}${suffix}`)) suffix++;
+      res[i].columnName = `${res[i].columnName}${suffix}`;
+    }
+    usedNames.add(res[i].columnName);
+  }
+}
+
+function extractTediousColumns(columns, addDriverNativeColumn = false) {
   const res = columns.map(col => {
     const resCol = {
       columnName: col.colName,
@@ -23,15 +35,30 @@ function extractColumns(columns, addDriverNativeColumn = false) {
     return resCol;
   });
 
-  const usedNames = new Set();
-  for (let i = 0; i < res.length; i++) {
-    if (usedNames.has(res[i].columnName)) {
-      let suffix = 2;
-      while (res.has(`${res[i].columnName}${suffix}`)) suffix++;
-      res[i].columnName = `${res[i].columnName}${suffix}`;
+  makeUniqueColumnNames(res);
+
+  return res;
+}
+
+function extractNativeColumns(meta) {
+  const res = meta.map(col => {
+    const resCol = {
+      columnName: col.name,
+      dataType: col.sqlType.toLowerCase(),
+      notNull: !col.nullable,
+    };
+
+    if (resCol.dataType.endsWith(' identity')) {
+      resCol.dataType = resCol.dataType.replace(' identity', '');
+      resCol.autoIncrement = true;
     }
-    usedNames.add(res[i].columnName);
-  }
+    if (col.size && resCol.dataType.includes('char')) {
+      resCol.dataType += `(${col.size})`;
+    }
+    return resCol;
+  });
+
+  makeUniqueColumnNames(res);
 
   return res;
 }
@@ -62,6 +89,7 @@ async function tediousConnect({ server, port, user, password, database }) {
       if (err) {
         reject(err);
       }
+      connection._connectionType = 'tedious';
       resolve(connection);
     });
     connection.connect();
@@ -78,6 +106,7 @@ async function nativeConnect({ server, port, user, password, database, authType 
   return new Promise((resolve, reject) => {
     msnodesqlv8.open(connectionString, (err, conn) => {
       if (err) reject(err);
+      conn._connectionType = 'msnodesqlv8';
       resolve(conn);
     });
   });
@@ -101,7 +130,7 @@ async function tediousQueryCore(pool, sql, options) {
       else resolve(result);
     });
     request.on('columnMetadata', function(columns) {
-      result.columns = extractColumns(columns, addDriverNativeColumn);
+      result.columns = extractTediousColumns(columns, addDriverNativeColumn);
     });
     request.on('row', function(columns) {
       result.rows.push(
@@ -123,14 +152,54 @@ async function nativeQueryCore(pool, sql, options) {
     });
   }
   return new Promise((resolve, reject) => {
-    pool.query(sql, (err, rows) => {
-      if (err) reject(err);
+    let columns = null;
+    let currentRow = null;
+    const q = pool.query(sql);
+    const rows = [];
+
+    q.on('meta', meta => {
+      columns = extractNativeColumns(meta);
+    });
+
+    q.on('column', (index, data) => {
+      currentRow[columns[index].columnName] = data;
+    });
+
+    q.on('row', index => {
+      if (currentRow) rows.push(currentRow);
+      currentRow = {};
+    });
+
+    q.on('error', err => {
+      reject(err);
+    });
+
+    q.on('done', () => {
+      if (currentRow) rows.push(currentRow);
       resolve({
+        columns,
         rows,
       });
     });
   });
 }
+
+// async function nativeQueryCore(pool, sql, options) {
+//   if (sql == null) {
+//     return Promise.resolve({
+//       rows: [],
+//       columns: [],
+//     });
+//   }
+//   return new Promise((resolve, reject) => {
+//     pool.query(sql, (err, rows) => {
+//       if (err) reject(err);
+//       resolve({
+//         rows,
+//       });
+//     });
+//   });
+// }
 
 /** @type {import('dbgate-types').EngineDriver} */
 const driver = {
@@ -145,7 +214,7 @@ const driver = {
     return tediousConnect(conn);
   },
   async queryCore(pool, sql, options) {
-    if (pool.constructor.name == 'ConnectionWrapper') {
+    if (pool._connectionType == 'msnodesqlv8') {
       return nativeQueryCore(pool, sql, options);
     } else {
       return tediousQueryCore(pool, sql, options);
@@ -196,7 +265,7 @@ const driver = {
       });
     });
     request.on('columnMetadata', function(columns) {
-      currentColumns = extractColumns(columns);
+      currentColumns = extractTediousColumns(columns);
       options.recordset(currentColumns);
     });
     request.on('row', function(columns) {
@@ -220,7 +289,7 @@ const driver = {
       pass.end();
     });
     request.on('columnMetadata', function(columns) {
-      currentColumns = extractColumns(columns);
+      currentColumns = extractTediousColumns(columns);
       pass.write(structure || { columns: currentColumns });
     });
     request.on('row', function(columns) {
