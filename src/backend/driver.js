@@ -318,7 +318,7 @@ const driver = {
 
 driver.initialize = dbgateEnv => {
   if (dbgateEnv.nativeModules) {
-    msnodesqlv8 = dbgateEnv.nativeModules.msnodesqlv8;
+    msnodesqlv8 = dbgateEnv.nativeModules.msnodesqlv8();
   }
 };
 
