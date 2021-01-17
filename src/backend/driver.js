@@ -184,6 +184,70 @@ async function nativeQueryCore(pool, sql, options) {
   });
 }
 
+async function tediousReadQuery(pool, sql, structure) {
+  const pass = new stream.PassThrough({
+    objectMode: true,
+    highWaterMark: 100,
+  });
+  let currentColumns = [];
+
+  const request = new tedious.Request(sql, (err, rowCount) => {
+    if (err) console.error(err);
+    pass.end();
+  });
+  request.on('columnMetadata', function(columns) {
+    currentColumns = extractTediousColumns(columns);
+    pass.write(structure || { columns: currentColumns });
+  });
+  request.on('row', function(columns) {
+    const row = _.zipObject(
+      currentColumns.map(x => x.columnName),
+      columns.map(x => x.value)
+    );
+    pass.write(row);
+  });
+  pool.execSql(request);
+
+  return pass;
+}
+
+async function nativeReadQuery(pool, sql, structure) {
+  const pass = new stream.PassThrough({
+    objectMode: true,
+    highWaterMark: 100,
+  });
+
+  let columns = null;
+  let currentRow = null;
+  const q = pool.query(sql);
+
+  q.on('meta', meta => {
+    columns = extractNativeColumns(meta);
+    pass.write(structure || { columns });
+  });
+
+  q.on('column', (index, data) => {
+    currentRow[columns[index].columnName] = data;
+  });
+
+  q.on('row', index => {
+    if (currentRow) pass.write(currentRow);
+    currentRow = {};
+  });
+
+  q.on('error', err => {
+    console.error(err);
+    pass.end();
+  });
+
+  q.on('done', () => {
+    if (currentRow) pass.write(currentRow);
+    pass.end();
+  });
+
+  return pass;
+}
+
 // async function nativeQueryCore(pool, sql, options) {
 //   if (sql == null) {
 //     return Promise.resolve({
@@ -278,30 +342,11 @@ const driver = {
     pool.execSqlBatch(request);
   },
   async readQuery(pool, sql, structure) {
-    const pass = new stream.PassThrough({
-      objectMode: true,
-      highWaterMark: 100,
-    });
-    let currentColumns = [];
-
-    const request = new tedious.Request(sql, (err, rowCount) => {
-      if (err) console.error(err);
-      pass.end();
-    });
-    request.on('columnMetadata', function(columns) {
-      currentColumns = extractTediousColumns(columns);
-      pass.write(structure || { columns: currentColumns });
-    });
-    request.on('row', function(columns) {
-      const row = _.zipObject(
-        currentColumns.map(x => x.columnName),
-        columns.map(x => x.value)
-      );
-      pass.write(row);
-    });
-    pool.execSql(request);
-
-    return pass;
+    if (pool._connectionType == 'msnodesqlv8') {
+      return nativeReadQuery(pool, sql, structure);
+    } else {
+      return tediousReadQuery(pool, sql, structure);
+    }
   },
   async writeTable(pool, name, options) {
     return createBulkInsertStream(this, stream, pool, name, options);
