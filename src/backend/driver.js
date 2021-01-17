@@ -11,10 +11,32 @@ const { tediousConnect, tediousQueryCore, tediousReadQuery, tediousStream } = re
 const { nativeConnect, nativeQueryCore, nativeReadQuery, nativeStream } = nativeDriver;
 let msnodesqlv8;
 
+const windowsAuthTypes = [
+  {
+    title: 'Windows',
+    name: 'sspi',
+    disabledFields: ['password', 'port', 'user'],
+  },
+  {
+    title: 'SQL Server',
+    name: 'sql',
+    disabledFields: ['port'],
+  },
+  {
+    title: 'Tedious driver',
+    name: 'tedious',
+  },
+];
+
 /** @type {import('dbgate-types').EngineDriver} */
 const driver = {
   ...driverBase,
   analyserClass: MsSqlAnalyser,
+
+  getAuthTypes() {
+    return msnodesqlv8 ? windowsAuthTypes : null;
+  },
+
   async connect(conn) {
     const { authType } = conn;
     if (msnodesqlv8 && (authType == 'sspi' || authType == 'sql')) {
