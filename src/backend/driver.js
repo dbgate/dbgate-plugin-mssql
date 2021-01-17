@@ -1,10 +1,9 @@
 const _ = require('lodash');
 const stream = require('stream');
-// const mssql = require('mssql');
-const tedious = require('tedious');
 const driverBase = require('../frontend/driver');
 const MsSqlAnalyser = require('./MsSqlAnalyser');
-const createBulkInsertStream = require('./createBulkInsertStream');
+const createTediousBulkInsertStream = require('./createTediousBulkInsertStream');
+const createNativeBulkInsertStream = require('./createNativeBulkInsertStream');
 const AsyncLock = require('async-lock');
 const nativeDriver = require('./nativeDriver');
 const lock = new AsyncLock();
@@ -51,7 +50,11 @@ const driver = {
     }
   },
   async writeTable(pool, name, options) {
-    return createBulkInsertStream(this, stream, pool, name, options);
+    if (pool._connectionType == 'msnodesqlv8') {
+      return createNativeBulkInsertStream(this, stream, pool, name, options);
+    } else {
+      return createTediousBulkInsertStream(this, stream, pool, name, options);
+    }
   },
   async getVersion(pool) {
     const { version } = (await this.query(pool, 'SELECT @@VERSION AS version')).rows[0];

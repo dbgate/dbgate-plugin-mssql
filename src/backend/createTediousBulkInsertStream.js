@@ -41,7 +41,7 @@ function runBulkInsertBatch(pool, tableName, writable, rows) {
  *
  * @param {import('dbgate-types').EngineDriver} driver
  */
-function createBulkInsertStream(driver, stream, pool, name, options) {
+function createTediousBulkInsertStream(driver, stream, pool, name, options) {
   const writable = createBulkInsertStreamBase(driver, stream, pool, name, options);
 
   const fullName = name.schemaName ? `[${name.schemaName}].[${name.pureName}]` : name.pureName;
@@ -67,4 +67,4 @@ function createBulkInsertStream(driver, stream, pool, name, options) {
   return writable;
 }
 
-module.exports = createBulkInsertStream;
+module.exports = createTediousBulkInsertStream;
