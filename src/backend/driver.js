@@ -1,105 +1,56 @@
 const _ = require('lodash');
 const stream = require('stream');
-// const mssql = require('mssql');
-const tedious = require('tedious');
 const driverBase = require('../frontend/driver');
 const MsSqlAnalyser = require('./MsSqlAnalyser');
-const createBulkInsertStream = require('./createBulkInsertStream');
+const createTediousBulkInsertStream = require('./createTediousBulkInsertStream');
+const createNativeBulkInsertStream = require('./createNativeBulkInsertStream');
 const AsyncLock = require('async-lock');
+const nativeDriver = require('./nativeDriver');
 const lock = new AsyncLock();
+const { tediousConnect, tediousQueryCore, tediousReadQuery, tediousStream } = require('./tediousDriver');
+const { nativeConnect, nativeQueryCore, nativeReadQuery, nativeStream } = nativeDriver;
+let msnodesqlv8;
 
-function extractColumns(columns, addDriverNativeColumn = false) {
-  const res = columns.map((col) => {
-    const resCol = {
-      columnName: col.colName,
-      dataType: col.type.name.toLowerCase(),
-      driverNativeColumn: addDriverNativeColumn ? col : undefined,
-
-      notNull: !(col.flags & 0x01),
-      autoIncrement: !!(col.flags & 0x10),
-    };
-    if (col.dataLength) resCol.dataType += `(${col.dataLength})`;
-    return resCol;
-  });
-
-  const usedNames = new Set();
-  for (let i = 0; i < res.length; i++) {
-    if (usedNames.has(res[i].columnName)) {
-      let suffix = 2;
-      while (res.has(`${res[i].columnName}${suffix}`)) suffix++;
-      res[i].columnName = `${res[i].columnName}${suffix}`;
-    }
-    usedNames.add(res[i].columnName);
-  }
-
-  return res;
-}
+const windowsAuthTypes = [
+  {
+    title: 'Windows',
+    name: 'sspi',
+    disabledFields: ['password', 'port', 'user'],
+  },
+  {
+    title: 'SQL Server',
+    name: 'sql',
+    disabledFields: ['port'],
+  },
+  {
+    title: 'Tedious driver',
+    name: 'tedious',
+  },
+];
 
 /** @type {import('dbgate-types').EngineDriver} */
 const driver = {
   ...driverBase,
   analyserClass: MsSqlAnalyser,
-  async connect({ server, port, user, password, database }) {
-    return new Promise((resolve, reject) => {
-      const connection = new tedious.Connection({
-        server,
 
-        authentication: {
-          type: 'default',
-          options: {
-            userName: user,
-            password: password,
-          },
-        },
+  getAuthTypes() {
+    return msnodesqlv8 ? windowsAuthTypes : null;
+  },
 
-        options: {
-          encrypt: false,
-          enableArithAbort: true,
-          validateBulkLoadParameters: false,
-          requestTimeout: 1000 * 3600,
-          database,
-          port,
-        },
-      });
-      connection.on('connect', function (err) {
-        if (err) {
-          reject(err);
-        }
-        resolve(connection);
-      });
-      connection.connect();
-    });
+  async connect(conn) {
+    const { authType } = conn;
+    if (msnodesqlv8 && (authType == 'sspi' || authType == 'sql')) {
+      return nativeConnect(conn);
+    }
+
+    return tediousConnect(conn);
   },
   async queryCore(pool, sql, options) {
-    if (sql == null) {
-      return Promise.resolve({
-        rows: [],
-        columns: [],
-      });
+    if (pool._connectionType == 'msnodesqlv8') {
+      return nativeQueryCore(pool, sql, options);
+    } else {
+      return tediousQueryCore(pool, sql, options);
     }
-    const { addDriverNativeColumn } = options || {};
-    return new Promise((resolve, reject) => {
-      const result = {
-        rows: [],
-        columns: [],
-      };
-      const request = new tedious.Request(sql, (err, rowCount) => {
-        if (err) reject(err);
-        else resolve(result);
-      });
-      request.on('columnMetadata', function (columns) {
-        result.columns = extractColumns(columns, addDriverNativeColumn);
-      });
-      request.on('row', function (columns) {
-        result.rows.push(
-          _.zipObject(
-            result.columns.map((x) => x.columnName),
-            columns.map((x) => x.value)
-          )
-        );
-      });
-      pool.execSql(request);
-    });
   },
   async query(pool, sql, options) {
     return lock.acquire('connection', async () => {
@@ -107,85 +58,25 @@ const driver = {
     });
   },
   async stream(pool, sql, options) {
-    let currentColumns = [];
-
-    const handleInfo = (info) => {
-      const { message, lineNumber, procName } = info;
-      options.info({
-        message,
-        line: lineNumber,
-        procedure: procName,
-        time: new Date(),
-        severity: 'info',
-      });
-    };
-    const handleError = (error) => {
-      const { message, lineNumber, procName } = error;
-      options.info({
-        message,
-        line: lineNumber,
-        procedure: procName,
-        time: new Date(),
-        severity: 'error',
-      });
-    };
-
-    pool.on('infoMessage', handleInfo);
-    pool.on('errorMessage', handleError);
-    const request = new tedious.Request(sql, (err, rowCount) => {
-      // if (err) reject(err);
-      // else resolve(result);
-      options.done();
-      pool.off('infoMessage', handleInfo);
-      pool.off('errorMessage', handleError);
-
-      options.info({
-        message: `${rowCount} rows affected`,
-        time: new Date(),
-        severity: 'info',
-      });
-    });
-    request.on('columnMetadata', function (columns) {
-      currentColumns = extractColumns(columns);
-      options.recordset(currentColumns);
-    });
-    request.on('row', function (columns) {
-      const row = _.zipObject(
-        currentColumns.map((x) => x.columnName),
-        columns.map((x) => x.value)
-      );
-      options.row(row);
-    });
-    pool.execSqlBatch(request);
+    if (pool._connectionType == 'msnodesqlv8') {
+      return nativeStream(pool, sql, options);
+    } else {
+      return tediousStream(pool, sql, options);
+    }
   },
   async readQuery(pool, sql, structure) {
-    const pass = new stream.PassThrough({
-      objectMode: true,
-      highWaterMark: 100,
-    });
-    let currentColumns = [];
-
-    const request = new tedious.Request(sql, (err, rowCount) => {
-      if (err) console.error(err);
-      pass.end();
-    });
-    request.on('columnMetadata', function (columns) {
-      currentColumns = extractColumns(columns);
-      pass.write(structure || { columns: currentColumns });
-    });
-    request.on('row', function (columns) {
-      const row = _.zipObject(
-        currentColumns.map((x) => x.columnName),
-        columns.map((x) => x.value)
-      );
-      pass.write(row);
-    });
-    pool.execSql(request);
-
-    return pass;
+    if (pool._connectionType == 'msnodesqlv8') {
+      return nativeReadQuery(pool, sql, structure);
+    } else {
+      return tediousReadQuery(pool, sql, structure);
+    }
   },
   async writeTable(pool, name, options) {
-    return createBulkInsertStream(this, stream, pool, name, options);
+    if (pool._connectionType == 'msnodesqlv8') {
+      return createNativeBulkInsertStream(this, stream, pool, name, options);
+    } else {
+      return createTediousBulkInsertStream(this, stream, pool, name, options);
+    }
   },
   async getVersion(pool) {
     const { version } = (await this.query(pool, 'SELECT @@VERSION AS version')).rows[0];
@@ -195,6 +86,13 @@ const driver = {
     const { rows } = await this.query(pool, 'SELECT name FROM sys.databases order by name');
     return rows;
   },
+};
+
+driver.initialize = dbgateEnv => {
+  if (dbgateEnv.nativeModules) {
+    msnodesqlv8 = dbgateEnv.nativeModules.msnodesqlv8();
+  }
+  nativeDriver.initialize(dbgateEnv);
 };
 
 module.exports = driver;
