@@ -136,6 +136,64 @@ async function nativeReadQuery(pool, sql, structure) {
   return pass;
 }
 
+async function nativeStream(pool, sql, options) {
+  const handleInfo = info => {
+    const { message, lineNumber, procName } = info;
+    options.info({
+      message,
+      line: lineNumber,
+      procedure: procName,
+      time: new Date(),
+      severity: 'info',
+    });
+  };
+  const handleError = error => {
+    const { message, lineNumber, procName } = error;
+    options.info({
+      message,
+      line: lineNumber,
+      procedure: procName,
+      time: new Date(),
+      severity: 'error',
+    });
+  };
+
+  let columns = null;
+  let currentRow = null;
+  const q = pool.query(sql);
+
+  q.on('meta', meta => {
+    if (currentRow) options.row(currentRow);
+    currentRow = null;
+    columns = extractNativeColumns(meta);
+    options.recordset(columns);
+  });
+
+  q.on('column', (index, data) => {
+    currentRow[columns[index].columnName] = data;
+  });
+
+  q.on('row', index => {
+    if (currentRow) options.row(currentRow);
+    currentRow = {};
+  });
+
+  q.on('error', err => {
+    handleError(err);
+    options.done();
+  });
+
+  q.on("info", info => {
+    handleInfo(info);
+  });
+
+
+  q.on('done', () => {
+    if (currentRow) options.row(currentRow);
+    options.done();
+  });
+}
+
 const initialize = dbgateEnv => {
   if (dbgateEnv.nativeModules) {
     msnodesqlv8 = dbgateEnv.nativeModules.msnodesqlv8();
@@ -146,5 +204,6 @@ module.exports = {
   nativeConnect,
   nativeQueryCore,
   nativeReadQuery,
+  nativeStream,
   initialize,
 };

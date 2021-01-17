@@ -114,8 +114,62 @@ async function tediousReadQuery(pool, sql, structure) {
   return pass;
 }
 
+async function tediousStream(pool, sql, options) {
+  let currentColumns = [];
+
+  const handleInfo = info => {
+    const { message, lineNumber, procName } = info;
+    options.info({
+      message,
+      line: lineNumber,
+      procedure: procName,
+      time: new Date(),
+      severity: 'info',
+    });
+  };
+  const handleError = error => {
+    const { message, lineNumber, procName } = error;
+    options.info({
+      message,
+      line: lineNumber,
+      procedure: procName,
+      time: new Date(),
+      severity: 'error',
+    });
+  };
+
+  pool.on('infoMessage', handleInfo);
+  pool.on('errorMessage', handleError);
+  const request = new tedious.Request(sql, (err, rowCount) => {
+    // if (err) reject(err);
+    // else resolve(result);
+    options.done();
+    pool.off('infoMessage', handleInfo);
+    pool.off('errorMessage', handleError);
+
+    options.info({
+      message: `${rowCount} rows affected`,
+      time: new Date(),
+      severity: 'info',
+    });
+  });
+  request.on('columnMetadata', function(columns) {
+    currentColumns = extractTediousColumns(columns);
+    options.recordset(currentColumns);
+  });
+  request.on('row', function(columns) {
+    const row = _.zipObject(
+      currentColumns.map(x => x.columnName),
+      columns.map(x => x.value)
+    );
+    options.row(row);
+  });
+  pool.execSqlBatch(request);
+}
+
 module.exports = {
   tediousConnect,
   tediousQueryCore,
   tediousReadQuery,
+  tediousStream,
 };
