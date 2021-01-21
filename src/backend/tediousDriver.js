@@ -4,7 +4,7 @@ const tedious = require('tedious');
 const makeUniqueColumnNames = require('./makeUniqueColumnNames');
 
 function extractTediousColumns(columns, addDriverNativeColumn = false) {
-  const res = columns.map(col => {
+  const res = columns.map((col) => {
     const resCol = {
       columnName: col.colName,
       dataType: col.type.name.toLowerCase(),
@@ -41,10 +41,10 @@ async function tediousConnect({ server, port, user, password, database }) {
         validateBulkLoadParameters: false,
         requestTimeout: 1000 * 3600,
         database,
-        port,
+        port: port ? parseInt(port) : undefined,
       },
     });
-    connection.on('connect', function(err) {
+    connection.on('connect', function (err) {
       if (err) {
         reject(err);
       }
@@ -72,14 +72,14 @@ async function tediousQueryCore(pool, sql, options) {
       if (err) reject(err);
       else resolve(result);
     });
-    request.on('columnMetadata', function(columns) {
+    request.on('columnMetadata', function (columns) {
       result.columns = extractTediousColumns(columns, addDriverNativeColumn);
     });
-    request.on('row', function(columns) {
+    request.on('row', function (columns) {
       result.rows.push(
         _.zipObject(
-          result.columns.map(x => x.columnName),
-          columns.map(x => x.value)
+          result.columns.map((x) => x.columnName),
+          columns.map((x) => x.value)
         )
       );
     });
@@ -98,14 +98,14 @@ async function tediousReadQuery(pool, sql, structure) {
     if (err) console.error(err);
     pass.end();
   });
-  request.on('columnMetadata', function(columns) {
+  request.on('columnMetadata', function (columns) {
     currentColumns = extractTediousColumns(columns);
     pass.write(structure || { columns: currentColumns });
   });
-  request.on('row', function(columns) {
+  request.on('row', function (columns) {
     const row = _.zipObject(
-      currentColumns.map(x => x.columnName),
-      columns.map(x => x.value)
+      currentColumns.map((x) => x.columnName),
+      columns.map((x) => x.value)
     );
     pass.write(row);
   });
@@ -117,7 +117,7 @@ async function tediousReadQuery(pool, sql, structure) {
 async function tediousStream(pool, sql, options) {
   let currentColumns = [];
 
-  const handleInfo = info => {
+  const handleInfo = (info) => {
     const { message, lineNumber, procName } = info;
     options.info({
       message,
@@ -127,7 +127,7 @@ async function tediousStream(pool, sql, options) {
       severity: 'info',
     });
   };
-  const handleError = error => {
+  const handleError = (error) => {
     const { message, lineNumber, procName } = error;
     options.info({
       message,
@@ -153,14 +153,14 @@ async function tediousStream(pool, sql, options) {
       severity: 'info',
     });
   });
-  request.on('columnMetadata', function(columns) {
+  request.on('columnMetadata', function (columns) {
     currentColumns = extractTediousColumns(columns);
     options.recordset(currentColumns);
   });
-  request.on('row', function(columns) {
+  request.on('row', function (columns) {
     const row = _.zipObject(
-      currentColumns.map(x => x.columnName),
-      columns.map(x => x.value)
+      currentColumns.map((x) => x.columnName),
+      columns.map((x) => x.value)
     );
     options.row(row);
   });
