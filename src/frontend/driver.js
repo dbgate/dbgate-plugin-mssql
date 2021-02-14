@@ -20,6 +20,7 @@ const driver = {
   dialect,
   engine: 'mssql@dbgate-plugin-mssql',
   title: 'Microsoft SQL Server',
+  defaultPort: 1433,
 };
 
 module.exports = driver;
