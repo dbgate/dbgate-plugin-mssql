@@ -8,6 +8,9 @@ const dialect = {
   offsetFetchRangeSyntax: true,
   stringEscapeChar: "'",
   fallbackDataType: 'nvarchar(max)',
+  explicitDropConstraint: false,
+  enableConstraintsPerTable: true,
+  anonymousPrimaryKey: false,
   quoteIdentifier(s) {
     return `[${s}]`;
   },
