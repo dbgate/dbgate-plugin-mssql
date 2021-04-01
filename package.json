@@ -1,7 +1,7 @@
 {
   "name": "dbgate-plugin-mssql",
   "main": "dist/backend.js",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "homepage": "https://github.com/dbgate/dbgate-plugin-mssql",
   "description": "MS SQL connect plugin for DbGate",
   "repository": {
