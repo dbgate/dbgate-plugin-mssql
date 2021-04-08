@@ -4,7 +4,7 @@ const tedious = require('tedious');
 const makeUniqueColumnNames = require('./makeUniqueColumnNames');
 
 function extractTediousColumns(columns, addDriverNativeColumn = false) {
-  const res = columns.map((col) => {
+  const res = columns.map(col => {
     const resCol = {
       columnName: col.colName,
       dataType: col.type.name.toLowerCase(),
@@ -80,8 +80,8 @@ async function tediousQueryCore(pool, sql, options) {
     request.on('row', function (columns) {
       result.rows.push(
         _.zipObject(
-          result.columns.map((x) => x.columnName),
-          columns.map((x) => x.value)
+          result.columns.map(x => x.columnName),
+          columns.map(x => x.value)
         )
       );
     });
@@ -102,12 +102,15 @@ async function tediousReadQuery(pool, sql, structure) {
   });
   request.on('columnMetadata', function (columns) {
     currentColumns = extractTediousColumns(columns);
-    pass.write(structure || { columns: currentColumns });
+    pass.write({
+      __isStreamHeader: true,
+      ...(structure || { columns: currentColumns }),
+    });
   });
   request.on('row', function (columns) {
     const row = _.zipObject(
-      currentColumns.map((x) => x.columnName),
-      columns.map((x) => x.value)
+      currentColumns.map(x => x.columnName),
+      columns.map(x => x.value)
     );
     pass.write(row);
   });
@@ -119,7 +122,7 @@ async function tediousReadQuery(pool, sql, structure) {
 async function tediousStream(pool, sql, options) {
   let currentColumns = [];
 
-  const handleInfo = (info) => {
+  const handleInfo = info => {
     const { message, lineNumber, procName } = info;
     options.info({
       message,
@@ -129,7 +132,7 @@ async function tediousStream(pool, sql, options) {
       severity: 'info',
     });
   };
-  const handleError = (error) => {
+  const handleError = error => {
     const { message, lineNumber, procName } = error;
     options.info({
       message,
@@ -161,8 +164,8 @@ async function tediousStream(pool, sql, options) {
   });
   request.on('row', function (columns) {
     const row = _.zipObject(
-      currentColumns.map((x) => x.columnName),
-      columns.map((x) => x.value)
+      currentColumns.map(x => x.columnName),
+      columns.map(x => x.value)
     );
     options.row(row);
   });

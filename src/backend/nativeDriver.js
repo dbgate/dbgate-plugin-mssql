@@ -111,7 +111,10 @@ async function nativeReadQuery(pool, sql, structure) {
 
   q.on('meta', meta => {
     columns = extractNativeColumns(meta);
-    pass.write(structure || { columns });
+    pass.write({
+      __isStreamHeader: true,
+      ...(structure || { columns }),
+    });
   });
 
   q.on('column', (index, data) => {
@@ -183,10 +186,9 @@ async function nativeStream(pool, sql, options) {
     options.done();
   });
 
-  q.on("info", info => {
+  q.on('info', info => {
     handleInfo(info);
   });
-
 
   q.on('done', () => {
     if (currentRow) options.row(currentRow);
